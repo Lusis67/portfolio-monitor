@@ -1,0 +1,63 @@
+name: Weekly portfolio email
+
+on:
+  # 22:00 UTC Friday. Brisbane is UTC+10 (AEST) and Queensland does not
+  # observe daylight saving, so 22:00 + 10:00 = 08:00 Saturday, every week of
+  # the year, with no seasonal shift to correct for.
+  #
+  # Expect this to run LATE. GitHub throttles scheduled workflows, especially
+  # on private repositories and at the top of the hour, and routinely delivers
+  # them anywhere from minutes to several hours after the nominal time. Runs
+  # can also be dropped entirely during peak load. That is GitHub's documented
+  # behaviour, not a bug in this workflow — if the email arrives at 10am
+  # instead of 8am, nothing is broken. Use the manual trigger below if you
+  # want it now.
+  schedule:
+    - cron: "0 22 * * 5"
+  workflow_dispatch:
+
+# Commit the updated state.json back to the repository after a successful send.
+permissions:
+  contents: write
+
+# Never let a manual run and a scheduled run fight over state.json.
+concurrency:
+  group: weekly-portfolio-email
+  cancel-in-progress: false
+
+jobs:
+  email:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        # persist-credentials defaults to true, which is what lets the
+        # commit-back step push with the job's GITHUB_TOKEN.
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build and send the email
+        env:
+          # The only three secrets this project has. None of them is ever read
+          # from holdings.yaml, and none is ever written to the repository.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python main.py
+
+      - name: Commit state.json back
+        # Only after a successful send: state records what was reported, and
+        # if nothing was reported there is nothing to record.
+        if: success()
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: scripts/commit_state.sh state.json

@@ -1,0 +1,96 @@
+# holdings.yaml — the portfolio monitor's only configuration.
+#
+# Fill in `holdings`. Everything else has a working default, and every alert
+# below is an example you can delete.
+#
+# Nothing in this file is a secret. The Anthropic key and the Gmail app
+# password live in GitHub Secrets and are never read from here.
+
+portfolio:
+  # Used in the email subject line, nothing else.
+  name: "LeLusis"
+  currency: AUD
+
+holdings:
+  # ticker        as yfinance wants it. ASX listings need the .AX suffix.
+  # units         how many you hold. Fractions are fine.
+  # target_weight percent of the portfolio you intend this to be. See the
+  #               note under `targets` about what happens if these don't sum
+  #               to 100.
+  # asset_type    free text, used only to group the summary table. Suggested:
+  #               equity | etf | lic | reit | cash.
+  # nav_source    OPTIONAL, and only meaningful for a listed fund (etf / lic).
+  #               A page that publishes the fund's NAV per unit. Used to show
+  #               premium/discount to NAV. Leave it out for ordinary shares —
+  #               a share has no NAV and the figure would be meaningless.
+  #               NOT BUILT YET: this is phase 2, and the field is ignored
+  #               until then rather than being silently half-read.
+
+  - ticker: BHP.AX
+    units: 0
+    target_weight: 0
+    asset_type: equity
+
+  - ticker: VAS.AX
+    units: 0
+    target_weight: 0
+    asset_type: etf
+    nav_source: https://www.vanguard.com.au/personal/invest-with-us/etf?portId=8205
+
+  # - ticker: ARG.AX
+  #   units: 0
+  #   target_weight: 0
+  #   asset_type: lic
+  #   nav_source: https://www.argoinvestments.com.au/nta
+
+targets:
+  # If target_weight across all holdings doesn't sum to 100, the run says so
+  # in the email rather than quietly normalising — a target set that doesn't
+  # add up is usually a typo, not an intention.
+  tolerate_unallocated_pct: 0
+
+alerts:
+  # Rules are named types with parameters, not expressions. That is on
+  # purpose: a config file that can run arbitrary code is a config file that
+  # can be a security problem, and you do not need the generality.
+  #
+  # Every triggered rule is reported with the numbers behind it, so you can
+  # check the arithmetic rather than trust it.
+  #
+  # `applies_to` is optional. Omit it and the rule applies to every holding;
+  # give a list of tickers to narrow it.
+
+  - name: "Drifted far from target"
+    type: weight_drift
+    # Triggers when |actual weight - target weight| exceeds this many
+    # PERCENTAGE POINTS (not a percentage of the target).
+    exceeds_pct_points: 5
+
+  - name: "Big weekly move"
+    type: price_move
+    # Triggers when the week's change is beyond +/- this percent. The same
+    # threshold the Claude explanation uses for "material" is 3%, so setting
+    # this lower than 3 means alerts that carry no explanation with them.
+    abs_change_pct: 10
+
+  # - name: "BHP below my line"
+  #   type: price_level
+  #   applies_to: [BHP.AX]
+  #   below: 35.00
+
+  # --- phase 2, not built yet; present so the schema doesn't change later ---
+  # - name: "Trading at a discount"
+  #   type: premium_discount
+  #   applies_to: [VAS.AX]
+  #   beyond_abs_pct: 2
+  #
+  # - name: "Price-sensitive announcement"
+  #   type: price_sensitive_announcement
+
+email:
+  # Sent from GMAIL_ADDRESS to itself, exactly like the fantasy brief. Add
+  # other addresses here and they go in To: alongside you.
+  also_to: []
+  # Holdings whose week was unremarkable still appear in the summary table;
+  # this only controls whether they get a written note.
+  note_threshold_pct: 3
