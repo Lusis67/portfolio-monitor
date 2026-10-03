@@ -1,8 +1,12 @@
 """Weights, drift and the week's change.
 
-Two rules run through all of this:
-  * a missing price is never silently treated as zero, and
-  * nothing is divided by a total that might be zero.
+Three rules run through all of this:
+  * a missing price is never silently treated as zero,
+  * nothing is divided by a total that might be zero, and
+  * a holding whose price was typed into holdings.yaml gets no weekly change.
+    It counts in full towards the value and the weights — that is what the
+    field is for — but there is no previous close behind it, and a fabricated
+    0.00% would claim the thing did not move, which the data cannot support.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .config import Config, Holding
-from .prices import Quote
+from .prices import Quote, manual_quote
 
 
 @dataclass
@@ -23,6 +27,10 @@ class Row:
     drift_pp: float | None = None
     prev_price: float | None = None
     week_change_pct: float | None = None
+    # Only for a manually priced holding: how old its price is, in days, and
+    # whether that is past `targets.stale_price_days`.
+    price_age_days: int | None = None
+    price_stale: bool = False
 
     @property
     def ticker(self) -> str:
@@ -35,6 +43,15 @@ class Row:
     @property
     def priced(self) -> bool:
         return self.quote.ok
+
+    @property
+    def fixed_price(self) -> bool:
+        """True when this row's price came from the config, not from a feed."""
+        return self.quote.fixed
+
+    @property
+    def price_as_of(self):
+        return self.quote.as_of
 
 
 @dataclass
@@ -68,9 +85,13 @@ def build_portfolio(
 
     rows: list[Row] = []
     for holding in config.holdings:
-        quote = quotes.get(holding.ticker) or Quote(
-            ticker=holding.ticker, error="no price was fetched for this ticker"
-        )
+        if holding.manual_price:
+            # Never fetched, so never looked up in `quotes` either.
+            quote = manual_quote(holding)
+        else:
+            quote = quotes.get(holding.ticker) or Quote(
+                ticker=holding.ticker, error="no price was fetched for this ticker"
+            )
         row = Row(holding=holding, quote=quote)
         if quote.ok:
             row.value = holding.units * quote.price
@@ -86,6 +107,15 @@ def build_portfolio(
             row.actual_weight = row.value / total * 100.0
             row.drift_pp = row.actual_weight - row.target_weight
 
+        if row.fixed_price:
+            # A hand-written price has no previous close behind it. Leave
+            # week_change_pct as None so the email prints "—": the one thing
+            # that must never appear here is 0.00%.
+            if row.price_as_of is not None:
+                row.price_age_days = (today - row.price_as_of).days
+                row.price_stale = row.price_age_days > config.stale_price_days
+            continue
+
         prev = previous_prices.get(row.ticker)
         if prev is not None and row.quote.ok and prev > 0:
             row.prev_price = prev
@@ -98,6 +128,20 @@ def build_portfolio(
             "No price for " + ", ".join(failed) + ". These holdings are missing from "
             "the portfolio total and from every weight below — the figures are "
             "incomplete, not small."
+        )
+    stale = [r for r in rows if r.price_stale]
+    if stale:
+        detail = ", ".join(
+            f"{r.ticker} priced {r.quote.price:g} on {r.price_as_of.isoformat()}, "
+            f"{r.price_age_days} days ago"
+            for r in stale
+        )
+        warnings.append(
+            "A manual price in holdings.yaml is older than "
+            f"{config.stale_price_days:g} days: {detail}. Those values are used as "
+            "written and counted in full, so the total is only as current as they "
+            "are. Cash especially drifts as it is spent — paste a fresh figure and "
+            "date into holdings.yaml when you can."
         )
     if any(r.quote.rate_limited for r in rows):
         warnings.append(

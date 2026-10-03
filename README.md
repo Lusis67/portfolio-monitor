@@ -30,9 +30,43 @@ aborted rather than mail a half-written brief.
 
 ## Configuring it
 
-Everything lives in `holdings.yaml`, which documents itself. Fill in
-`holdings` — ticker as yfinance wants it (ASX listings need the `.AX`
-suffix), units, and the target weight you intend that holding to be.
+Everything lives in `holdings.yaml`, which holds the owner's real portfolio.
+Each holding takes:
+
+| field | meaning |
+| --- | --- |
+| `ticker` | the identifier. For anything fetched, the yfinance symbol — ASX listings need the `.AX` suffix |
+| `units` | how many you hold; fractions are fine |
+| `target_weight` | the percent of the portfolio you intend it to be. If the targets don't sum to 100 (within `targets.tolerate_unallocated_pct`) the email says so; nothing is normalised |
+| `asset_type` | free text, used only to group the table: `equity`, `etf`, `lic`, `managed_fund`, `cash`… |
+| `price` | optional — see below |
+| `price_as_of` | required with `price`: the ISO date that price was true |
+| `nav_source` | phase 2, parsed and ignored |
+
+### Holdings priced by hand
+
+Some holdings have no price to fetch. Cash has no ticker, and an unlisted
+managed fund like `VAN0004AU` is identified by an APIR code that no price feed
+knows. Give such a holding a `price` and a `price_as_of`, and:
+
+* **it is never fetched** — its ticker is never sent to yfinance;
+* **it counts in full** towards the total, the weights and drift;
+* **it has no weekly change.** The week column shows "—", never 0.00%, and
+  `price_move` rules report it as "could not be checked" rather than run.
+  A typed-in price has no previous close behind it, and a zero would claim
+  the holding didn't move;
+* **its date is shown** beside it, and once it is older than
+  `targets.stale_price_days` (default 14) the email carries a warning. Only a
+  warning — the run goes ahead with the old price, and says so.
+
+Cash is just such a holding at `price: 1.00` with `asset_type: cash`. Its
+balance drifts as you spend, so the staleness warning is a fair reminder to
+update the figure.
+
+A `price` with no `price_as_of`, an impossible date, or a price that isn't a
+positive number is a **config error naming the holding**. That price is
+refused, not used: the holding shows as "no price — excluded from the total"
+until it is fixed, and it is still not fetched.
 
 Alert rules are named types with parameters, not expressions. Phase 1
 implements three:
@@ -47,6 +81,10 @@ Any rule can be narrowed to particular holdings with `applies_to`. A rule
 whose `type` is unknown, or whose parameters are missing, is **reported by
 name in the email and on stderr** and does not run — a rule you think is
 running and isn't is worse than no rule.
+
+Two further types are reserved for phase 2 and not built:
+`premium_discount` and `price_sensitive_announcement`. A rule using either is
+reported as "phase 2, not built yet — NOT running" rather than as a typo.
 
 Nothing in `holdings.yaml` is a secret, and no credential is ever read from it.
 
@@ -77,7 +115,8 @@ repository, which is how next week knows what this week's prices were.
 ## Tests
 
 No test runner. Each file is a plain script that prints a line per check and
-exits non-zero on the first failure:
+exits non-zero on the first failure. None of them touch the network, and none
+depend on the owner's numbers in `holdings.yaml`:
 
 ```bash
 for t in tests/test_*.py; do python "$t" || break; done
@@ -89,6 +128,10 @@ for t in tests/test_*.py; do python "$t" || break; done
   API with a contract. It returns HTTP 429 under rate limiting and Actions
   runners get throttled. Anything it fails to fetch is **named** in the email
   and on stderr, and is excluded from the total rather than counted as zero.
+* Hand-set prices are only as current as the last time someone typed them
+  in. Today that is cash and both Vanguard managed funds, about 61% of the
+  portfolio by value. The email dates them and flags stale ones, but it cannot
+  know what they are worth now.
 * "This week" means "since the last recorded run". If a run is missed, the
   email says how long the period actually covers.
 * The written notes come from a model with web search. Anything it found

@@ -75,6 +75,13 @@ def _check_weight_drift(rule: AlertRule, row: Row):
 
 def _check_price_move(rule: AlertRule, row: Row):
     limit = float(rule.params["abs_change_pct"])
+    if row.fixed_price:
+        # Checked before anything else, and never compared: a hand-written
+        # price has no weekly move, and a rule that cannot run says so.
+        return None, (
+            "its price is set by hand in holdings.yaml, so it has no weekly move "
+            "to measure"
+        )
     if row.week_change_pct is None:
         reason = (
             "no price for this holding"
@@ -105,6 +112,10 @@ def _check_price_level(rule: AlertRule, row: Row):
     if not row.priced:
         return None, "no price for this holding"
     price = row.quote.price
+    if row.fixed_price:
+        basis = f"manual price {_fmt(price, 4)} as of {row.price_as_of.isoformat()}"
+    else:
+        basis = f"last close {_fmt(price)}"
     below = rule.params.get("below")
     above = rule.params.get("above")
     if isinstance(below, (int, float)) and not isinstance(below, bool) and price < float(below):
@@ -114,7 +125,7 @@ def _check_price_level(rule: AlertRule, row: Row):
                 rule_type=rule.type,
                 ticker=row.ticker,
                 message=f"{row.ticker} is below {_fmt(float(below))}",
-                arithmetic=f"last close {_fmt(price)} < {_fmt(float(below))}",
+                arithmetic=f"{basis} < {_fmt(float(below))}",
             ),
             None,
         )
@@ -125,7 +136,7 @@ def _check_price_level(rule: AlertRule, row: Row):
                 rule_type=rule.type,
                 ticker=row.ticker,
                 message=f"{row.ticker} is above {_fmt(float(above))}",
-                arithmetic=f"last close {_fmt(price)} > {_fmt(float(above))}",
+                arithmetic=f"{basis} > {_fmt(float(above))}",
             ),
             None,
         )

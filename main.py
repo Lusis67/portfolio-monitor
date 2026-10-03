@@ -50,7 +50,9 @@ def run(args) -> int:
         print(f"CONFIG PROBLEM — {err}", file=sys.stderr)
 
     stored = state_mod.load_state(args.state)
-    quotes = prices.fetch_prices(config.tickers)
+    # Only holdings without a `price` in holdings.yaml are fetched. CASH and the
+    # unlisted funds are never sent to yfinance; see config.fetch_tickers.
+    quotes = prices.fetch_prices(config.fetch_tickers)
     # Shout about failures here rather than inside the fetcher, so every path
     # into this function is equally loud.
     prices.warn_about_failures(quotes)

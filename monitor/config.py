@@ -7,6 +7,7 @@ password come from the environment only.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 import yaml
@@ -28,6 +29,14 @@ class Holding:
     # nav_source is phase 2. It is parsed so the schema is stable, and
     # deliberately not used anywhere else.
     nav_source: str | None = None
+    # A holding may carry its price in the config instead of being fetched:
+    # cash has no ticker to fetch, and an unlisted managed fund (an APIR code
+    # like VAN0004AU) has no price feed at all. `manual_price` is True whenever
+    # a `price` key was written, even if the value turned out to be unusable —
+    # the ticker must never be sent to yfinance on the strength of a typo.
+    manual_price: bool = False
+    price: float | None = None
+    price_as_of: date | None = None
 
 
 @dataclass
@@ -50,13 +59,27 @@ class Config:
     tolerate_unallocated_pct: float
     also_to: list[str]
     note_threshold_pct: float
+    # How old a manual price may be before the email says so. A warning, not
+    # an error: a stale price is still the best number available.
+    stale_price_days: float = 14
     # Problems that must be shouted about rather than swallowed: unknown alert
     # types, missing rule parameters, target weights that don't add up.
     config_errors: list[str] = field(default_factory=list)
 
     @property
     def tickers(self) -> list[str]:
+        """Every holding's identifier, fetched or not."""
         return [h.ticker for h in self.holdings]
+
+    @property
+    def fetch_tickers(self) -> list[str]:
+        """The identifiers a price feed is asked about — and only those.
+
+        A holding carrying a `price` is never fetched. CASH and the APIR codes
+        would fail every week if they were, and a failure is reserved for
+        things that actually went wrong.
+        """
+        return [h.ticker for h in self.holdings if not h.manual_price]
 
     @property
     def is_unconfigured(self) -> bool:
@@ -108,6 +131,11 @@ def _parse_holdings(raw: Any, errors: list[str]) -> list[Holding]:
             errors.append(f"{ticker}: units is negative ({units})")
             continue
 
+        manual_price = "price" in row
+        price, price_as_of = None, None
+        if manual_price:
+            price, price_as_of = _parse_manual_price(ticker, row, errors)
+
         holdings.append(
             Holding(
                 ticker=ticker,
@@ -115,9 +143,60 @@ def _parse_holdings(raw: Any, errors: list[str]) -> list[Holding]:
                 target_weight=target,
                 asset_type=str(row.get("asset_type", "other")),
                 nav_source=row.get("nav_source"),
+                manual_price=manual_price,
+                price=price,
+                price_as_of=price_as_of,
             )
         )
     return holdings
+
+
+def _parse_manual_price(ticker: str, row: dict, errors: list[str]):
+    """Read `price` and `price_as_of`, or report why they cannot be used.
+
+    An undated manual price is refused rather than used. A number typed in by
+    hand months ago and presented without its date silently becomes a lie, and
+    the whole point of the field is to carry cash and the unlisted funds
+    honestly. Refusing it costs one holding's value for a week; accepting it
+    costs the reader's ability to tell a current price from an old one.
+
+    The holding itself survives, priceless and named: it still appears in the
+    email as "no price — excluded from the total", alongside the config error.
+    It is never fetched, because `price` was written and the ticker is not
+    something a feed could answer for.
+    """
+    price = _as_float(row.get("price"), f"{ticker}.price", errors)
+    if price is not None and not price > 0:  # also catches NaN
+        errors.append(
+            f"{ticker}: price is {price:g} — a manual price must be above zero. "
+            "This holding has NO price and is excluded from the total."
+        )
+        price = None
+
+    raw_as_of = row.get("price_as_of")
+    if raw_as_of is None:
+        errors.append(
+            f"{ticker}: has a `price` but no `price_as_of`. An undated manual "
+            "price is refused, not used — this holding has NO price and is "
+            "excluded from the total. Add `price_as_of: YYYY-MM-DD`."
+        )
+        return None, None
+
+    as_of = raw_as_of if isinstance(raw_as_of, date) else None
+    if as_of is None:
+        try:
+            as_of = date.fromisoformat(str(raw_as_of).strip())
+        except ValueError:
+            errors.append(
+                f"{ticker}: price_as_of {raw_as_of!r} is not an ISO date "
+                "(YYYY-MM-DD). The price is refused, not used — this holding "
+                "has NO price and is excluded from the total."
+            )
+            return None, None
+
+    if price is None:
+        return None, None
+    return price, as_of
 
 
 def _parse_alerts(raw: Any, tickers: list[str], errors: list[str]) -> list[AlertRule]:
@@ -200,10 +279,40 @@ def _validate_params(name: str, rtype: str, params: dict[str, Any]) -> str | Non
     return None
 
 
+DEFAULT_STALE_PRICE_DAYS = 14.0
+
+
+def _stale_price_days(targets: dict, errors: list[str]) -> float:
+    raw = targets.get("stale_price_days", DEFAULT_STALE_PRICE_DAYS)
+    value = _as_float(raw, "targets.stale_price_days", errors)
+    if value is None or value < 0:
+        if value is not None:
+            errors.append(
+                f"targets.stale_price_days is {value:g} — using the default "
+                f"{DEFAULT_STALE_PRICE_DAYS:g} days instead."
+            )
+        return DEFAULT_STALE_PRICE_DAYS
+    return value
+
+
+class ConfigLoader(yaml.SafeLoader):
+    """SafeLoader that leaves dates as text.
+
+    PyYAML turns anything date-shaped into a `date` itself, and on an
+    impossible one (`price_as_of: 2026-13-45`) raises a bare ValueError from
+    deep inside the loader — one typo would take down the whole run with a
+    traceback and no email. Read as text, the date reaches
+    `_parse_manual_price`, which reports it by holding and carries on.
+    """
+
+
+ConfigLoader.add_constructor("tag:yaml.org,2002:timestamp", ConfigLoader.construct_yaml_str)
+
+
 def load_config(path: str = "holdings.yaml") -> Config:
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            raw = yaml.safe_load(fh)
+            raw = yaml.load(fh, Loader=ConfigLoader)
     except FileNotFoundError as exc:
         raise ConfigError(f"{path} not found") from exc
     except yaml.YAMLError as exc:
@@ -222,6 +331,7 @@ def parse_config(raw: Any, source: str = "holdings.yaml") -> Config:
     targets = raw.get("targets") or {}
     email = raw.get("email") or {}
 
+    stale_days = _stale_price_days(targets, errors)
     holdings = _parse_holdings(raw.get("holdings"), errors)
     alerts = _parse_alerts(raw.get("alerts"), [h.ticker for h in holdings], errors)
 
@@ -238,6 +348,7 @@ def parse_config(raw: Any, source: str = "holdings.yaml") -> Config:
         tolerate_unallocated_pct=float(targets.get("tolerate_unallocated_pct") or 0),
         also_to=[str(a) for a in also_to],
         note_threshold_pct=float(email.get("note_threshold_pct", 3) or 0),
+        stale_price_days=stale_days,
         config_errors=errors,
     )
 

@@ -2,66 +2,70 @@
 
 ## What this is
 
-A weekly email about an ASX portfolio, sent to its owner on Saturday morning
-and read on a phone. It fetches last closes, compares each holding's actual
-weight against the target weight, evaluates the owner's own alert rules, asks
-Claude to explain anything that moved materially, and sends an HTML email with
-a plain-text alternative. Phase 1 of two.
+A weekly email about an ASX portfolio, read on a phone on Saturday morning.
+It values each holding, compares actual weights against targets, runs the
+owner's alert rules, asks Claude to explain material moves, and sends HTML
+with a plain-text alternative. Phase 1 of two.
 
 ## Stack
 
-Python 3.11, no framework. yfinance for prices, PyYAML for the single config
-file, the Anthropic SDK for one call to Claude Opus 5.5 with the web search
-tool, stdlib smtplib for Gmail. GitHub Actions runs it weekly and commits the
-run state back to the repository. There is no database and no test runner.
+Python 3.11, no framework. yfinance for prices, PyYAML for the one config
+file, the Anthropic SDK for a single Claude Opus 5.5 call with web search,
+stdlib smtplib for Gmail. GitHub Actions runs it weekly and commits
+`state.json` back. No database, no test runner.
 
 ## Current state
 
-The spine is complete and works end to end. A dry run against the committed
-config renders a full email without needing a single credential. Prices,
-weights, drift, the three phase 1 alert types, the Claude call, both email
-bodies, the Gmail send and the state file are all built. Seven test scripts
-cover the arithmetic against hand-worked numbers, every alert boundary,
-unknown and phase 2 alert types, the zero-unit portfolio, missing prices, the
-first run, every bad stop reason from the API, and the git commit-back
-including a simulated push race.
+The spine works end to end and now carries the owner's real portfolio: nine
+holdings, AUD 36,382.29 on 2026-10-03, 55% of it cash. Cash and the two
+unlisted Vanguard funds have no price feed, so they carry a hand-set `price`
+and `price_as_of`. They are never fetched and count in full. They show "—"
+for the week, never trip `price_move`, and are flagged once their price is
+more than 14 days old.
 
 ## Recent activity
 
-Built from an empty repository in one pass. All tests pass. The dry run was
-exercised against live Yahoo data and again against a forced price failure.
+Added hand-set prices and committed the real `holdings.yaml`. A live dry run
+fetched all six listed tickers at the expected closes. On the first attempt
+Yahoo returned nothing for CWY.AX; the email named it and ran on, and a retry
+was clean. Nine test scripts pass. A test now replaces yfinance at its lowest
+level and asserts that `CASH`, `VAN0004AU` and `VAN0003AU` are never requested.
 
 ## Blocked
 
-Nothing. Two things could not be verified from this container and are
-unverified rather than broken: the Claude call has never run against the real
-API (no key here, so it is covered by a fake client instead), and no email has
-ever been sent (no Gmail credentials). Both paths are exercised by tests, but
-a first real run will be the first real proof.
+Nothing. Still unproven rather than broken: the Claude call has never hit the
+real API, and no email has actually been sent. Both are covered by fakes.
 
 ## Next up
 
-- `[auto]` Fill in `holdings.yaml` with real units and target weights. Until
-  then every email correctly reports that nothing is configured.
-- `[decide]` Add the three GitHub secrets and let the first scheduled run go
-  out, or dispatch it manually to see it sooner.
-- `[auto]` Phase 2: ASX announcements, including the price-sensitive flag and
-  the `price_sensitive_announcement` alert type.
-- `[auto]` Phase 2: ex-distribution handling, so a distribution does not read
-  as a price fall.
-- `[auto]` Phase 2: NAV premium/discount for listed funds, using the
-  `nav_source` field already in the schema, and the `premium_discount` alert.
+- `[decide]` Set real target weights (see below).
+- `[decide]` Add the three GitHub secrets and let the first run go out.
+- `[auto]` Fetch the Vanguard managed fund prices properly. Unsolved:
+  `www.vanguard.com.au/personal/api/products/personal/fund/<portId>/prices`
+  returns data, but it is keyed on an internal portId, and a short probe did
+  not find the APIR→portId mapping.
+- `[auto]` Phase 2: ASX announcements and `price_sensitive_announcement`;
+  ex-distribution handling; NAV premium/discount via `nav_source` and
+  `premium_discount`.
 
 ## Open decisions
 
-**A truncated or refused brief aborts the whole run.** The instruction was to
-raise rather than send on `max_tokens` and on `refusal`, so that is what
-happens: exit 3, no email, a red job. That trades one week's email for the
-certainty of never sending a half-written one. The alternative — send the
-numbers with a line saying the notes failed — is what already happens when the
-API is merely unreachable. Say the word and truncation can join it.
+**Target weights are placeholders equal to the actual weights on 2026-10-03.**
+Drift reads about zero everywhere, so the drift alert cannot fire, until real
+targets are chosen. Two small mismatches with the brief: the total is
+$36,382.29, not $36,382.30, and OCL is actually 2.35% (2.3 rounded) against
+its 2.4 target. The 2.4 is what makes the targets sum to exactly 100.
 
-**Week change comes from the stored prices, not from a five-day history
-window.** It is what `state.json` is for, and it means the email never claims
-a week it cannot evidence. The cost is that a lost `state.json` costs one
-week's comparison.
+**An undated manual price is refused, not used.** That holding drops out of
+the total, named, until it is dated. The alternative was to use it under a
+warning.
+
+**Hand-priced holdings appear under "Rules that could not be checked" every
+week** for `price_move`, because a rule that cannot run is reported. That is
+correct, but it is a standing line. Say so if it reads as noise.
+
+**A truncated or refused brief aborts the run** (exit 3, no email), while an
+unreachable API sends the numbers anyway. Truncation could join the latter.
+
+**Week change comes from `state.json`, not a five-day window.** A lost state
+file costs one week's comparison.

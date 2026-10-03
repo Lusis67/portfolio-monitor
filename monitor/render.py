@@ -24,6 +24,7 @@ TD = "padding:8px 4px;border-bottom:1px solid #e6e6e6;text-align:right;font-size
 MUTED = "color:#6b6b6b;font-size:12px"
 UP = "#157347"
 DOWN = "#b02a37"
+STALE = "#a35c00"
 WARN_BOX = (
     "background:#fff4e5;border-left:4px solid #e08600;padding:10px 12px;"
     "margin:0 0 14px 0;border-radius:3px;font-size:14px"
@@ -147,7 +148,15 @@ def render_html(config, portfolio, alerts, explanation, run_date: date, state_wa
         f'<p style="{MUTED};margin-top:24px;border-top:1px solid #e6e6e6;padding-top:10px">'
         "Prices are last closes from Yahoo Finance via yfinance, which is a scraper "
         "and sometimes simply fails; anything it could not fetch is named above rather "
-        "than filled in. Nothing here is advice."
+        "than filled in. "
+        + (
+            "Holdings marked “set by hand” are not fetched at all: their price is "
+            "the one written in holdings.yaml, dated beside it, and they show no "
+            "weekly change because there is none to measure. "
+            if any(r.fixed_price for r in portfolio.rows)
+            else ""
+        )
+        + "Nothing here is advice."
         "</p>"
     )
     a("</div>")
@@ -186,6 +195,29 @@ def _html_table(config, portfolio) -> str:
     return "".join(out)
 
 
+def _last_price(row) -> str:
+    """Two places for a quoted close; a manual price as written, up to four,
+    because a managed fund's unit price (0.874, 4.4237) is not a share price
+    and rounding it to cents misstates every value built from it."""
+    price = row.quote.price
+    if row.fixed_price and round(price, 2) != price:
+        return f"{price:,.4f}".rstrip("0")
+    return f"{price:,.2f}"
+
+
+def _price_date_text(row) -> str:
+    """'set by hand, as of 2026-10-02', plus its age when it is stale."""
+    text = f"set by hand, as of {row.price_as_of.isoformat()}"
+    if row.price_stale:
+        text += f" — stale, {row.price_age_days} days old"
+    return text
+
+
+def _html_price_date(row) -> str:
+    colour = f"color:{STALE};font-size:12px" if row.price_stale else MUTED
+    return f'<span style="{colour}">{_e(_price_date_text(row))}</span>'
+
+
 def _html_row(row, config) -> str:
     name = f'<strong>{_e(row.ticker)}</strong>'
     if not row.priced:
@@ -197,8 +229,10 @@ def _html_row(row, config) -> str:
         name += f'<br><span style="{MUTED}">units: 0</span>'
     else:
         name += f'<br><span style="{MUTED}">{row.holding.units:g} units</span>'
+    if row.fixed_price and row.priced:
+        name += "<br>" + _html_price_date(row)
 
-    last = f"{row.quote.price:,.2f}" if row.priced else "—"
+    last = _last_price(row) if row.priced else "—"
 
     if row.week_change_pct is None:
         week = f'<span style="{MUTED}">—</span>'
@@ -338,7 +372,7 @@ def render_text(config, portfolio, alerts, explanation, run_date: date, state_wa
         lines += [f"Total: {total}", ""]
 
     for row in portfolio.rows:
-        price = f"{row.quote.price:,.2f}" if row.priced else "no price"
+        price = _last_price(row) if row.priced else "no price"
         week = pct(row.week_change_pct, signed=True) if row.week_change_pct is not None else "—"
         weight = pct(row.actual_weight) if row.actual_weight is not None else "—"
         drift = f"{row.drift_pp:+.1f}pp" if row.drift_pp is not None else "—"
@@ -346,6 +380,8 @@ def render_text(config, portfolio, alerts, explanation, run_date: date, state_wa
             f"{row.ticker:<10} {price:>10}  week {week:>7}  "
             f"weight {weight:>6} (target {row.target_weight:.1f}%, drift {drift})"
         )
+        if row.fixed_price and row.priced:
+            lines.append(f"{'':<10} price {_price_date_text(row)}")
     lines.append("")
 
     if explanation is not None and (explanation.notes or explanation.leftover):
@@ -377,9 +413,15 @@ def render_text(config, portfolio, alerts, explanation, run_date: date, state_wa
                 lines.append(f"* {name} ({tickers}) — {reason}")
             lines.append("")
 
-    lines.append(
+    footer = (
         "Prices are last closes from Yahoo Finance via yfinance, which is a scraper "
         "and sometimes fails; anything it could not fetch is named above rather than "
-        "filled in. Nothing here is advice."
+        "filled in. "
     )
+    if any(r.fixed_price for r in portfolio.rows):
+        footer += (
+            "Prices marked “set by hand” are not fetched: they are the ones written "
+            "in holdings.yaml, dated, and show no weekly change. "
+        )
+    lines.append(footer + "Nothing here is advice.")
     return "\n".join(lines)

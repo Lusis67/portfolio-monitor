@@ -13,6 +13,23 @@ from monitor.prices import Quote
 
 tmp = tempfile.mkdtemp()
 
+# The committed holdings.yaml is the owner's real portfolio and changes when he
+# edits it, so the scenarios below run against a fixture of their own: the
+# unconfigured two-holding template the repository started with.
+TEMPLATE = os.path.join(tmp, "template.yaml")
+with open(TEMPLATE, "w", encoding="utf-8") as fh:
+    fh.write("""
+portfolio: {name: "LeLusis", currency: AUD}
+holdings:
+  - {ticker: BHP.AX, units: 0, target_weight: 0, asset_type: equity}
+  - {ticker: VAS.AX, units: 0, target_weight: 0, asset_type: etf}
+targets: {tolerate_unallocated_pct: 0}
+alerts:
+  - {name: "Drifted far from target", type: weight_drift, exceeds_pct_points: 5}
+  - {name: "Big weekly move", type: price_move, abs_change_pct: 10}
+email: {also_to: [], note_threshold_pct: 3}
+""")
+
 
 def fake_prices(prices):
     def fetch(tickers, **kw):
@@ -24,7 +41,9 @@ def fake_prices(prices):
     return fetch
 
 
-def run(argv, prices, explain=None):
+def run(argv, prices, explain=None, config=TEMPLATE):
+    if config is not None:
+        argv = argv + ["--config", config]
     original_fetch = entry.prices.fetch_prices
     original_explain = entry.explain_mod.explain
     entry.prices.fetch_prices = fake_prices(prices)
@@ -124,5 +143,43 @@ check("names the missing secrets", "GMAIL_ADDRESS" in err and "GMAIL_APP_PASSWOR
 check("points at --dry-run", "--dry-run" in err)
 check("no state was written on a failed send",
       not os.path.exists(os.path.join(tmp, "unused.json")))
+
+heading("the committed portfolio, end to end, with no network")
+# Real yfinance is replaced at its lowest level — the one function that
+# imports it — so this proves what would actually have gone out to Yahoo.
+from monitor import prices as prices_mod  # noqa: E402
+from monitor.config import load_config  # noqa: E402
+
+real = load_config("holdings.yaml")
+asked = []
+
+
+def recording_history(ticker):
+    asked.append(ticker)
+    raise RuntimeError("HTTP Error 404: no network in tests")
+
+
+original_history = prices_mod._yf_history
+prices_mod._yf_history = recording_history
+out, err = io.StringIO(), io.StringIO()
+try:
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = entry.main(["--dry-run", "--state", os.path.join(tmp, "real.json")])
+finally:
+    prices_mod._yf_history = original_history
+out, err = out.getvalue(), err.getvalue()
+
+equal("exit 0", code, 0)
+check("yfinance was asked about exactly the listed holdings",
+      asked == real.fetch_tickers, f"asked {asked}")
+for never in ("CASH", "VAN0004AU", "VAN0003AU"):
+    check(f"{never} was never sent to yfinance", never not in asked, f"asked {asked}")
+    check(f"{never} is not reported as a fetch failure",
+          f"PRICE FETCH FAILED — {never}" not in err, err)
+manual_total = sum(h.units * h.price for h in real.holdings if h.manual_price)
+check("with every fetch failing, the manual-price holdings still make up the total",
+      f"AUD {manual_total:,.2f}" in out, f"wanted AUD {manual_total:,.2f}")
+check("and only the fetched holdings are named as excluded",
+      f"(excludes {', '.join(real.fetch_tickers)})" in out, out[:800])
 
 done()

@@ -49,6 +49,6 @@ and are not — `max_tokens`, `refusal`, `pause_turn` — each have a test.
 ## Phase 2
 
 Not built, deliberately, and there are no stubs for it beyond the `nav_source`
-field and the two reserved alert types already documented in `holdings.yaml`.
+field and the two reserved alert types already documented in `README.md`.
 Those two types are rejected at config load with a message saying they are
 phase 2, so nobody is misled into thinking a rule is running.

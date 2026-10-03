@@ -6,6 +6,12 @@ quietly returned nothing would render a tidy email reporting a portfolio worth
 zero, which is far worse than no email at all — so a failure here is recorded
 as a failure, named, and carried all the way into the email and onto stderr.
 Nothing in this module ever substitutes a number for a missing one.
+
+A holding that carries its own `price` in holdings.yaml never reaches Yahoo:
+`manual_quote` below builds its Quote from the config, and `main.py` asks the
+fetcher only about `config.fetch_tickers`. Cash has nothing to fetch, and the
+unlisted managed funds (APIR codes, not tickers) have no feed at all — asking
+anyway would fail every single week and bury the real failures in noise.
 """
 
 from __future__ import annotations
@@ -29,10 +35,41 @@ class Quote:
     as_of: date | None = None
     error: str | None = None
     rate_limited: bool = False
+    # True when the price came from holdings.yaml rather than from a feed.
+    # Everything downstream keys off this: such a price has no previous close
+    # to compare against, so it gets no weekly change and triggers no
+    # price_move rule, and its date is shown so its age can be judged.
+    fixed: bool = False
 
     @property
     def ok(self) -> bool:
         return self.price is not None
+
+
+def manual_quote(holding) -> Quote:
+    """The Quote for a holding whose price is written in the config.
+
+    Nothing is fetched. If the config could not give a usable price and date,
+    the result is a priced-at-nothing Quote — excluded from the total and named
+    in the email, exactly like a failed fetch, because an unusable manual price
+    is a missing number and a missing number is never a zero.
+    """
+    if holding.price is None:
+        return Quote(
+            ticker=holding.ticker,
+            error=(
+                "holdings.yaml gives this holding a `price` that cannot be used "
+                "(see the holdings.yaml problems above). Nothing was fetched: a "
+                "holding with a `price` is never sent to a price feed."
+            ),
+            fixed=True,
+        )
+    return Quote(
+        ticker=holding.ticker,
+        price=holding.price,
+        as_of=holding.price_as_of,
+        fixed=True,
+    )
 
 
 def _looks_rate_limited(exc: Exception) -> bool:

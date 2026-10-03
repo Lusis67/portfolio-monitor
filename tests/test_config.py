@@ -91,14 +91,35 @@ targets: {tolerate_unallocated_pct: 10}
 equal("a tolerance of 10pp accepts a 10pp gap", len(c.config_errors), 0)
 
 heading("the committed holdings.yaml")
+# Structural checks only. The owner edits units, prices and dates by hand, and
+# none of that should be able to break the tests.
 c = load_config("holdings.yaml")
 equal("parses with no complaints", c.config_errors, [])
-equal("two holdings", c.tickers, ["BHP.AX", "VAS.AX"])
 equal("two usable alert rules", [a.type for a in c.alerts], ["weight_drift", "price_move"])
-check("recognised as unconfigured", c.is_unconfigured is True)
+check("is a real portfolio, not the unconfigured template", c.is_unconfigured is False)
 equal("note threshold", c.note_threshold_pct, 3.0)
-check("nav_source is parsed but goes no further (phase 2)",
-      c.holdings[1].nav_source is not None and c.holdings[0].nav_source is None)
+equal("stale_price_days is read from targets", c.stale_price_days, 14.0)
+manual = {h.ticker for h in c.holdings if h.manual_price}
+check("cash and both unlisted funds carry a manual price",
+      {"CASH", "VAN0004AU", "VAN0003AU"} <= manual, str(manual))
+check("every manual price is dated",
+      all(h.price is not None and h.price_as_of is not None
+          for h in c.holdings if h.manual_price))
+check("none of them is ever fetched", not manual & set(c.fetch_tickers),
+      str(c.fetch_tickers))
+check("every other holding is", set(c.fetch_tickers) == set(c.tickers) - manual)
+check("the fetched ones are all ASX listings", all(t.endswith(".AX") for t in c.fetch_tickers),
+      str(c.fetch_tickers))
+
+heading("nav_source is parsed but goes no further (phase 2)")
+c = parse_config(yaml.safe_load("""
+portfolio: {name: T}
+holdings:
+  - {ticker: BHP.AX, units: 10, target_weight: 50}
+  - {ticker: VAS.AX, units: 5, target_weight: 50, nav_source: "https://example.invalid/nav"}
+"""))
+check("kept on the holding that has it", c.holdings[1].nav_source is not None)
+check("absent on the one that doesn't", c.holdings[0].nav_source is None)
 
 heading("an unusable file raises rather than guessing")
 try:
