@@ -41,6 +41,7 @@ Each holding takes:
 | `asset_type` | free text, used only to group the table: `equity`, `etf`, `lic`, `managed_fund`, `cash`… |
 | `price` | optional — see below |
 | `price_as_of` | required with `price`: the ISO date that price was true |
+| `entry_price` | optional: the average price **paid** per unit. Gives that holding an all-time P/L. Omit it and the row shows `—` and sits outside the portfolio P/L, which names what it excludes. Must be above zero |
 | `nav_source` | phase 2, parsed and ignored |
 
 ### Holdings priced by hand

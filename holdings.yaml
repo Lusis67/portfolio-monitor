@@ -10,7 +10,13 @@
 #      until you set real targets. That was deliberate: the alternative was
 #      inventing an asset allocation on your behalf.
 #
-#   2. The two managed funds and cash carry a manual `price`. They are not
+#   2. NO HOLDING HAS AN `entry_price` YET, so the email shows no all-time
+#      P/L. Add `entry_price: <average price paid per unit>` to any holding
+#      and that row gains an all-time figure; the portfolio total covers the
+#      ones that have it and names the ones that don't. Nothing is guessed:
+#      a holding without one shows "—", never zero.
+#
+#   3. The two managed funds and cash carry a manual `price`. They are not
 #      fetched — VAN0004AU and VAN0003AU are APIR codes for unlisted funds
 #      that don't trade, so no price feed has them. Paste a new price and
 #      date when you think of it; the email flags prices older than 14 days.

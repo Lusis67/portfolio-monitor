@@ -136,9 +136,31 @@ def render_html(config, portfolio, alerts, explanation, run_date: date, state_wa
                 f'{_e(", ".join(portfolio.failed_tickers))})</span>'
             )
         a(
-            f'<p style="margin:0 0 16px 0;font-size:18px"><strong>{_e(total)}</strong>'
+            f'<p style="margin:0 0 4px 0;font-size:18px"><strong>{_e(total)}</strong>'
             f'{suffix}</p>'
         )
+        if portfolio.total_pl_abs is not None:
+            pl = (
+                f'{money(portfolio.total_pl_abs, config.currency)} '
+                f'({portfolio.total_pl_pct:+.1f}%)'
+            )
+            gap = ""
+            if portfolio.pl_missing:
+                gap = (
+                    f' <span style="{MUTED}">— excludes '
+                    f'{_e(", ".join(portfolio.pl_missing))}, which have no entry '
+                    f'price</span>'
+                )
+            a(
+                f'<p style="margin:0 0 16px 0;font-size:14px">All-time '
+                f'<span style="color:{_change_colour(portfolio.total_pl_abs)}">'
+                f'{_e(pl)}</span>{gap}</p>'
+            )
+        elif any(r.priced for r in portfolio.rows):
+            a(
+                f'<p style="{MUTED};margin:0 0 16px 0">No all-time P/L: no holding '
+                f'has an <code>entry_price</code> in holdings.yaml yet.</p>'
+            )
 
     a(_html_table(config, portfolio))
     a(_html_notes(portfolio, explanation, config))
@@ -154,6 +176,14 @@ def render_html(config, portfolio, alerts, explanation, run_date: date, state_wa
             "the one written in holdings.yaml, dated beside it, and they show no "
             "weekly change because there is none to measure. "
             if any(r.fixed_price for r in portfolio.rows)
+            else ""
+        )
+        + (
+            "All-time P/L is price against the entry price written in "
+            "holdings.yaml. It is unrealised and price-only: it does not count "
+            "distributions or dividends received, franking, or brokerage, so for "
+            "an income holding it understates what you have actually made. "
+            if portfolio.total_pl_abs is not None
             else ""
         )
         + "Nothing here is advice."
@@ -175,11 +205,11 @@ def _html_table(config, portfolio) -> str:
         '<table role="presentation" style="width:100%;border-collapse:collapse;'
         'table-layout:fixed;margin:0 0 20px 0">',
         "<thead><tr>",
-        f'<th style="{TH};text-align:left;width:30%">Holding</th>',
-        f'<th style="{TH};width:18%">Last</th>',
-        f'<th style="{TH};width:17%">Week</th>',
-        f'<th style="{TH};width:20%">Weight</th>',
-        f'<th style="{TH};width:15%">Drift</th>',
+        f'<th style="{TH};text-align:left;width:28%">Holding</th>',
+        f'<th style="{TH};width:17%">Last</th>',
+        f'<th style="{TH};width:22%">Week / all-time</th>',
+        f'<th style="{TH};width:19%">Weight</th>',
+        f'<th style="{TH};width:14%">Drift</th>',
         "</tr></thead><tbody>",
     ]
 
@@ -233,6 +263,9 @@ def _html_row(row, config) -> str:
         name += "<br>" + _html_price_date(row)
 
     last = _last_price(row) if row.priced else "—"
+    if row.entry_price:
+        last += f'<br><span style="{MUTED}">from {row.entry_price:,.2f}</span>'
+
 
     if row.week_change_pct is None:
         week = f'<span style="{MUTED}">—</span>'
@@ -240,6 +273,11 @@ def _html_row(row, config) -> str:
         week = (
             f'<span style="color:{_change_colour(row.week_change_pct)}">'
             f"{row.week_change_pct:+.1f}%</span>"
+        )
+    if row.pl_pct is not None:
+        week += (
+            f'<br><span style="color:{_change_colour(row.pl_pct)};font-size:12px">'
+            f"{row.pl_pct:+.1f}% {row.pl_abs:+,.0f}</span>"
         )
 
     if row.actual_weight is None:
@@ -369,17 +407,30 @@ def render_text(config, portfolio, alerts, explanation, run_date: date, state_wa
         total = money(portfolio.total_value, config.currency)
         if portfolio.failed_tickers:
             total += f"  (excludes {', '.join(portfolio.failed_tickers)})"
-        lines += [f"Total: {total}", ""]
+        lines.append(f"Total: {total}")
+        if portfolio.total_pl_abs is not None:
+            pl = (
+                f"All-time: {money(portfolio.total_pl_abs, config.currency)} "
+                f"({portfolio.total_pl_pct:+.1f}%)"
+            )
+            if portfolio.pl_missing:
+                pl += f"  (excludes {', '.join(portfolio.pl_missing)} — no entry price)"
+            lines.append(pl)
+        lines.append("")
 
     for row in portfolio.rows:
         price = _last_price(row) if row.priced else "no price"
         week = pct(row.week_change_pct, signed=True) if row.week_change_pct is not None else "—"
         weight = pct(row.actual_weight) if row.actual_weight is not None else "—"
         drift = f"{row.drift_pp:+.1f}pp" if row.drift_pp is not None else "—"
+        alltime = pct(row.pl_pct, signed=True) if row.pl_pct is not None else "—"
         lines.append(
-            f"{row.ticker:<10} {price:>10}  week {week:>7}  "
+            f"{row.ticker:<10} {price:>10}  week {week:>7}  all-time {alltime:>7}  "
             f"weight {weight:>6} (target {row.target_weight:.1f}%, drift {drift})"
         )
+        if row.entry_price:
+            pl = f"{row.pl_abs:+,.0f}" if row.pl_abs is not None else "—"
+            lines.append(f"{'':<10} entry {row.entry_price:,.2f}, P/L {pl}")
         if row.fixed_price and row.priced:
             lines.append(f"{'':<10} price {_price_date_text(row)}")
     lines.append("")
@@ -422,6 +473,13 @@ def render_text(config, portfolio, alerts, explanation, run_date: date, state_wa
         footer += (
             "Prices marked “set by hand” are not fetched: they are the ones written "
             "in holdings.yaml, dated, and show no weekly change. "
+        )
+    if portfolio.total_pl_abs is not None:
+        footer += (
+            "All-time P/L is measured against the entry price in holdings.yaml. It "
+            "is unrealised and price-only: it excludes distributions and dividends "
+            "received, franking and brokerage, so for an income holding it "
+            "understates what you have actually made. "
         )
     lines.append(footer + "Nothing here is advice.")
     return "\n".join(lines)

@@ -31,6 +31,11 @@ class Row:
     # whether that is past `targets.stale_price_days`.
     price_age_days: int | None = None
     price_stale: bool = False
+    # All-time, price-only. None whenever the holding has no entry price or no
+    # current price — never 0, which would read as "bought at today's price".
+    cost_base: float | None = None
+    pl_abs: float | None = None
+    pl_pct: float | None = None
 
     @property
     def ticker(self) -> str:
@@ -53,6 +58,10 @@ class Row:
     def price_as_of(self):
         return self.quote.as_of
 
+    @property
+    def entry_price(self) -> float | None:
+        return self.holding.entry_price
+
 
 @dataclass
 class Portfolio:
@@ -66,6 +75,13 @@ class Portfolio:
     previous_run: date | None = None
     days_covered: int | None = None
     unconfigured: bool = False
+    # All-time P/L across the holdings that have BOTH an entry price and a
+    # current price. `pl_missing` names the ones left out, so a partial total
+    # can never be read as the whole portfolio's.
+    total_cost_base: float | None = None
+    total_pl_abs: float | None = None
+    total_pl_pct: float | None = None
+    pl_missing: list[str] = field(default_factory=list)
 
     @property
     def priced_rows(self) -> list[Row]:
@@ -95,12 +111,29 @@ def build_portfolio(
         row = Row(holding=holding, quote=quote)
         if quote.ok:
             row.value = holding.units * quote.price
+            if holding.entry_price:
+                row.cost_base = holding.units * holding.entry_price
+                row.pl_abs = row.value - row.cost_base
+                row.pl_pct = (quote.price - holding.entry_price) / holding.entry_price * 100.0
         rows.append(row)
 
     # The total covers priced holdings only. Holdings whose price failed are
     # excluded and named, rather than counted as zero.
     priced = [r for r in rows if r.priced]
     total = sum(r.value for r in priced) if priced else None
+
+    # The P/L total covers only rows carrying both prices. Summing over a
+    # subset and presenting it as the portfolio's would understate silently,
+    # so the holdings left out are named and travel with the number.
+    with_pl = [r for r in rows if r.pl_abs is not None and r.cost_base]
+    total_cost_base = sum(r.cost_base for r in with_pl) if with_pl else None
+    total_pl_abs = sum(r.pl_abs for r in with_pl) if with_pl else None
+    total_pl_pct = (
+        total_pl_abs / total_cost_base * 100.0
+        if total_cost_base
+        else None
+    )
+    pl_missing = [r.ticker for r in rows if r.pl_abs is None]
 
     for row in rows:
         if row.value is not None and total:
@@ -188,6 +221,10 @@ def build_portfolio(
         previous_run=previous_run,
         days_covered=days,
         unconfigured=unconfigured,
+        total_cost_base=total_cost_base,
+        total_pl_abs=total_pl_abs,
+        total_pl_pct=total_pl_pct,
+        pl_missing=pl_missing,
     )
 
 

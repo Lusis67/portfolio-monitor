@@ -37,6 +37,11 @@ class Holding:
     manual_price: bool = False
     price: float | None = None
     price_as_of: date | None = None
+    # Average price PAID per unit, in the portfolio currency. Optional, and
+    # absent is a first-class state: a holding without one shows "—" for
+    # all-time P/L and is left out of the portfolio P/L rather than being
+    # treated as free. Zero would read as a gift.
+    entry_price: float | None = None
 
 
 @dataclass
@@ -136,6 +141,16 @@ def _parse_holdings(raw: Any, errors: list[str]) -> list[Holding]:
         if manual_price:
             price, price_as_of = _parse_manual_price(ticker, row, errors)
 
+        entry_price = None
+        if row.get("entry_price") is not None:
+            entry_price = _as_float(row.get("entry_price"), f"{ticker}.entry_price", errors)
+            if entry_price is not None and not entry_price > 0:
+                errors.append(
+                    f"{ticker}: entry_price is {entry_price:g} — it must be above zero. "
+                    "This holding shows no all-time P/L and is left out of the total."
+                )
+                entry_price = None
+
         holdings.append(
             Holding(
                 ticker=ticker,
@@ -146,6 +161,7 @@ def _parse_holdings(raw: Any, errors: list[str]) -> list[Holding]:
                 manual_price=manual_price,
                 price=price,
                 price_as_of=price_as_of,
+                entry_price=entry_price,
             )
         )
     return holdings
