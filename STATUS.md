@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-10-06
+**Last updated:** 2026-10-10
 
 ## What this is
 
@@ -27,13 +27,22 @@ more than 14 days old.
 
 ## Recent activity
 
-**2026-10-06 — the first real run happened, and it worked.** A hand-triggered
-`workflow_dispatch` fetched all six listed tickers live, sent the email, and
-committed `state.json` back (`ac4a2fc..678bd70`). So yfinance, Gmail SMTP and
-the commit-back step are proven against the real repo. **The Claude call is
-still unproven**: `main.py` only calls it when something moved more than
-`note_threshold_pct`, and a first run has no prior prices, so that branch did
-not execute. The first scheduled run (Fri 22:00 UTC) is the first chance it can.
+**2026-10-10 — every path in this project has now executed for real.** Run 2
+(`event: schedule`, 2026-10-10 01:34 UTC, 3.6h behind its 22:00 slot — ordinary
+private-repo throttling) was the first scheduled run, and the first in which
+the Claude call could fire: `main.py` guards it with `if moved and ...`, and
+`CWY.AX` moved **+3.76%** against the stored close, past the 3%
+`note_threshold_pct`. So the gate demonstrably held. The call then succeeded —
+no `EXPLANATION SKIPPED` on stderr, and the send step took 32s against run 1's
+7s. `state.json` was committed again (`dfab831..21d8253`).
+
+That closes the last unproven path. yfinance, the Claude call with web search,
+Gmail SMTP and the commit-back step have all run against the real services.
+
+**2026-10-06 — the first real run.** A hand-triggered `workflow_dispatch`
+fetched all six listed tickers live, sent the email, and committed `state.json`
+(`ac4a2fc..678bd70`). It did not reach the Claude call: a first run has no
+prior prices, so nothing registered as moved.
 
 **2026-10-06 — all-time P/L.** A holding may now carry `entry_price`, the
 average price paid per unit. The row then shows an all-time percentage and
@@ -52,8 +61,12 @@ level and asserts that `CASH`, `VAN0004AU` and `VAN0003AU` are never requested.
 
 ## Blocked
 
-Nothing. Still unproven rather than broken: the Claude call has never hit the
-real API, and no email has actually been sent. Both are covered by fakes.
+Nothing. One thing remains genuinely **UNKNOWN**: how broadly
+`monitor/explain.py` converts failures into `ExplanationUnavailable`. The happy
+path is now proven, and the call site in `main.py` catches that exception and
+still sends the email — but whether *every* failure arrives as that exception
+has not been established, so an unhandled one costing the whole email rather
+than just the notes is not ruled out. It matters only when the API is down.
 
 ## Next up
 
