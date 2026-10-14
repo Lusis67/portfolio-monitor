@@ -15,7 +15,8 @@ import sys
 from datetime import date
 
 from monitor import alerts as alerts_mod
-from monitor import compute, explain as explain_mod, prices, render, state as state_mod
+from monitor import announcements, compute, explain as explain_mod, nav as nav_mod
+from monitor import prices, render, state as state_mod
 from monitor.config import ConfigError, load_config
 from monitor.mailer import MailError, send
 
@@ -33,6 +34,11 @@ def parse_args(argv=None):
         "--no-explain",
         action="store_true",
         help="skip the Claude call even if something moved (useful offline)",
+    )
+    parser.add_argument(
+        "--no-announcements",
+        action="store_true",
+        help="skip the ASX announcement feed and the NAV figures read from it",
     )
     return parser.parse_args(argv)
 
@@ -73,10 +79,35 @@ def run(args) -> int:
 
     report = alerts_mod.evaluate(config, portfolio)
 
+    # ---- ASX announcements, and the NAV figures that fall out of them ----
+    # Fetched after the portfolio is built because the holdings that moved
+    # decide which documents are worth downloading: the filer's
+    # `isPriceSensitive` flag misses things like a takeover update, so a
+    # holding's own price is the second signal. See announcements._wants_text.
+    moved = compute.movers(portfolio, config.note_threshold_pct)
+    feed = None
+    navs: list = []
+    if not args.no_announcements:
+        feed = announcements.collect(
+            [r.ticker for r in portfolio.rows if not r.holding.manual_price],
+            since=stored.last_run,
+            prioritise_tickers=[r.ticker for r in moved],
+        )
+        # Carried on the feed so both renderers say the same thing about it.
+        feed.warnings_text = announcements.warnings_for(feed)
+        for row in portfolio.rows:
+            if not row.priced:
+                continue
+            figure = nav_mod.nav_from_announcements(row.ticker, feed.items)
+            premium = nav_mod.premium_discount(
+                row.ticker, row.quote.price, figure, today=run_date
+            )
+            if premium is not None:
+                navs.append(premium)
+
     # ---- the one Claude call, and only if something actually moved ----
     explanation = None
     explain_warning = None
-    moved = compute.movers(portfolio, config.note_threshold_pct)
     if moved and not args.no_explain:
         try:
             explanation = explain_mod.explain(moved, portfolio, config.note_threshold_pct)
@@ -94,10 +125,12 @@ def run(args) -> int:
 
     subject = render.subject(config, portfolio, report, run_date)
     html_body = render.render_html(
-        config, portfolio, report, explanation, run_date, explain_warning=explain_warning
+        config, portfolio, report, explanation, run_date,
+        explain_warning=explain_warning, feed=feed, navs=navs,
     )
     text_body = render.render_text(
-        config, portfolio, report, explanation, run_date, explain_warning=explain_warning
+        config, portfolio, report, explanation, run_date,
+        explain_warning=explain_warning, feed=feed, navs=navs,
     )
 
     if args.dry_run:

@@ -80,7 +80,7 @@ def subject(config, portfolio, alerts, run_date: date) -> str:
 # --------------------------------------------------------------------------
 
 def render_html(config, portfolio, alerts, explanation, run_date: date, state_warning=None,
-                explain_warning=None) -> str:
+                explain_warning=None, feed=None, navs=None) -> str:
     out: list[str] = []
     a = out.append
 
@@ -163,8 +163,10 @@ def render_html(config, portfolio, alerts, explanation, run_date: date, state_wa
             )
 
     a(_html_table(config, portfolio))
+    a(_html_nav(navs))
     a(_html_notes(portfolio, explanation, config))
     a(_html_alerts(alerts))
+    a(_html_announcements(feed))
 
     a(
         f'<p style="{MUTED};margin-top:24px;border-top:1px solid #e6e6e6;padding-top:10px">'
@@ -302,6 +304,89 @@ def _html_row(row, config) -> str:
     )
 
 
+def _html_nav(navs) -> str:
+    """Premium or discount to NAV, for the holdings that publish one.
+
+    The NAV's own reporting date is shown beside it, never hidden: a unit price
+    from two weeks ago compared against today's close is indicative, and a
+    figure presented without its date would read as same-day.
+    """
+    rows = [pd for pd in (navs or []) if pd is not None]
+    if not rows:
+        return ""
+    out = [
+        f'<p style="{MUTED};margin:20px 0 6px 0;text-transform:uppercase;'
+        f'letter-spacing:0.04em;font-size:12px">Against NAV</p>'
+    ]
+    for pd in rows:
+        word = "discount to" if pd.is_discount else "premium to"
+        colour = DOWN if pd.is_discount else UP
+        age = ""
+        if pd.nav_as_of:
+            age = f" as at {pd.nav_as_of.isoformat()}"
+            if pd.stale_days is not None:
+                age += f", {pd.stale_days} days before this price"
+        out.append(
+            f'<p style="margin:0 0 8px 0;font-size:14px"><strong>{_e(pd.ticker)}</strong> '
+            f'{pd.price:,.2f} vs NAV {pd.nav_per_unit:,.4f} — '
+            f'<span style="color:{colour}">{abs(pd.premium_pct):.1f}% {word} NAV</span>'
+            f'<br><span style="{MUTED}">{_e(pd.source_headline)}{_e(age)}. '
+            f'Unaudited and approximate, as published by the fund.</span></p>'
+        )
+    return "".join(out)
+
+
+def _html_announcements(feed) -> str:
+    """Every announcement in the period, with the text of the ones worth reading.
+
+    Headlines are never omitted, because an unread announcement the owner can
+    see the existence of is a different thing from one he cannot. Where the
+    document was read, a short extract follows; where it was not, the row says
+    why rather than looking identical to an empty one.
+    """
+    if feed is None:
+        return ""
+    out: list[str] = []
+    for warning in getattr(feed, "warnings_text", []) or []:
+        out.append(
+            f'<div style="{WARN_BOX}">{_e(warning)}</div>'
+        )
+    items = list(getattr(feed, "items", []) or [])
+    if not items:
+        out.append(
+            f'<p style="{MUTED};margin:20px 0 0 0">No ASX announcements from these '
+            f'holdings in this period.</p>'
+        )
+        return "".join(out)
+
+    out.insert(
+        0,
+        f'<p style="{MUTED};margin:24px 0 6px 0;text-transform:uppercase;'
+        f'letter-spacing:0.04em;font-size:12px">Announcements '
+        f'({len(items)})</p>',
+    )
+    for a in items:
+        flag = ""
+        if a.price_sensitive:
+            flag = (
+                f' <span style="color:{DOWN};font-size:12px">price sensitive</span>'
+            )
+        body = ""
+        if a.has_text:
+            extract = a.text.strip().replace("\n", " ")
+            if len(extract) > 340:
+                extract = extract[:340].rsplit(" ", 1)[0] + "…"
+            body = f'<br><span style="{MUTED}">{_e(extract)}</span>'
+        elif a.text_error:
+            body = f'<br><span style="{MUTED}">document not read: {_e(a.text_error)}</span>'
+        out.append(
+            f'<p style="margin:0 0 10px 0;font-size:14px">'
+            f'<span style="{MUTED}">{a.when.isoformat()}</span> '
+            f'<strong>{_e(a.ticker)}</strong> {_e(a.headline)}{flag}{body}</p>'
+        )
+    return "".join(out)
+
+
 def _html_notes(portfolio, explanation, config) -> str:
     if explanation is None or (not explanation.notes and not explanation.leftover):
         if portfolio.first_run or portfolio.unconfigured:
@@ -373,7 +458,7 @@ def _html_alerts(alerts) -> str:
 # --------------------------------------------------------------------------
 
 def render_text(config, portfolio, alerts, explanation, run_date: date, state_warning=None,
-                explain_warning=None) -> str:
+                explain_warning=None, feed=None, navs=None) -> str:
     lines: list[str] = []
     lines.append(config.portfolio_name)
     header = f"Week to {run_date.strftime('%A %-d %B %Y')}"
@@ -474,6 +559,44 @@ def render_text(config, portfolio, alerts, explanation, run_date: date, state_wa
             "Prices marked “set by hand” are not fetched: they are the ones written "
             "in holdings.yaml, dated, and show no weekly change. "
         )
+    nav_rows = [pd for pd in (navs or []) if pd is not None]
+    if nav_rows:
+        lines += ["AGAINST NAV", "-" * 11]
+        for pd in nav_rows:
+            word = "discount to" if pd.is_discount else "premium to"
+            age = ""
+            if pd.nav_as_of:
+                age = f", NAV as at {pd.nav_as_of.isoformat()}"
+                if pd.stale_days is not None:
+                    age += f" ({pd.stale_days} days before this price)"
+            lines.append(
+                f"{pd.ticker:<10} {pd.price:,.2f} vs NAV {pd.nav_per_unit:,.4f}  "
+                f"{abs(pd.premium_pct):.1f}% {word} NAV{age}"
+            )
+            lines.append(f"{'':<10} source: {pd.source_headline}. Unaudited and approximate.")
+        lines.append("")
+
+    if feed is not None:
+        for warning in getattr(feed, "warnings_text", []) or []:
+            lines += ["! " + warning, ""]
+        items = list(getattr(feed, "items", []) or [])
+        if items:
+            head = f"ANNOUNCEMENTS ({len(items)})"
+            lines += [head, "-" * len(head)]
+            for a in items:
+                flag = "  [price sensitive]" if a.price_sensitive else ""
+                lines.append(f"{a.when.isoformat()}  {a.ticker:<10} {a.headline}{flag}")
+                if a.has_text:
+                    extract = " ".join(a.text.split())
+                    if len(extract) > 300:
+                        extract = extract[:300].rsplit(" ", 1)[0] + "..."
+                    lines.append(f"{'':<12}{extract}")
+                elif a.text_error:
+                    lines.append(f"{'':<12}document not read: {a.text_error}")
+            lines.append("")
+        else:
+            lines += ["No ASX announcements from these holdings in this period.", ""]
+
     if portfolio.total_pl_abs is not None:
         footer += (
             "All-time P/L is measured against the entry price in holdings.yaml. It "

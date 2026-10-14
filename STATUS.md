@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-10-10
+**Last updated:** 2026-10-15
 
 ## What this is
 
@@ -26,6 +26,29 @@ for the week, never trip `price_move`, and are flagged once their price is
 more than 14 days old.
 
 ## Recent activity
+
+**2026-10-15 — ASX announcements work, and the blocker was wrong.** The feed
+item's `url` field is empty, which an earlier pass took as "the documents are
+unreachable" and parked the whole feature on. The handle is `documentKey`, and
+`asx-research/1.0/file/{documentKey}` on the same host returns the PDF: HTTP
+200, `application/pdf`. No token, no scraper, no third-party mirror. So step 2
+of the original spec is done — headlines, the filer's price-sensitive flag, and
+document text where it is worth reading — and **step 4 came with it**: KKC's
+monthly NTA notice carries the NAV, so premium/discount needs no `nav_source`
+URL. KKC is at about **11% discount to NAV** (price 2.06 against NAV 2.3097 as
+at 2026-10-11).
+
+Three real constraints, all measured:
+- The feed returns **exactly five items per code**; `pageSize`, `count`,
+  `limit`, `page` and `itemsPerPage` are all ignored. When five do not reach
+  back to the period start the code is named as truncated and the email says
+  the list may be incomplete.
+- One filing can cover several funds (VGS and VVLU share a `documentKey`), so
+  documents are fetched once and attributed to each holding.
+- `isPriceSensitive` is unreliable. Cleanaway's EQT takeover update came back
+  flagged NOT price-sensitive, and in the following week CWY moved 2.9% against
+  a 3% threshold, so neither the flag nor price movement would have fetched it.
+  A `SUBSTANTIVE` headline list now decides first.
 
 **2026-10-10 — every path in this project has now executed for real.** Run 2
 (`event: schedule`, 2026-10-10 01:34 UTC, 3.6h behind its 22:00 slot — ordinary
@@ -61,7 +84,16 @@ level and asserts that `CASH`, `VAN0004AU` and `VAN0003AU` are never requested.
 
 ## Blocked
 
-Nothing. One thing remains genuinely **UNKNOWN**: how broadly
+Nothing. Two things are genuinely **UNKNOWN**.
+
+A fund that files NTAs on more than one basis is not guarded against. KKC files
+a weekly notice and a monthly one; all three read in testing were explicitly in
+Australian dollars, and the figure chosen is the most recently **valued** one
+rather than the most recently filed. But nothing checks the currency, so an
+issuer publishing a USD NAV would be compared against an AUD price without
+complaint. Not observed; not ruled out either.
+
+And: how broadly
 `monitor/explain.py` converts failures into `ExplanationUnavailable`. The happy
 path is now proven, and the call site in `main.py` catches that exception and
 still sends the email — but whether *every* failure arrives as that exception
@@ -77,9 +109,15 @@ than just the notes is not ruled out. It matters only when the API is down.
   `www.vanguard.com.au/personal/api/products/personal/fund/<portId>/prices`
   returns data, but it is keyed on an internal portId, and a short probe did
   not find the APIR→portId mapping.
-- `[auto]` Phase 2: ASX announcements and `price_sensitive_announcement`;
-  ex-distribution handling; NAV premium/discount via `nav_source` and
-  `premium_discount`.
+- `[auto]` **Step 3, ex-distribution handling, is the remaining Phase 2 item.**
+  The data is already free: `asx-research/1.0/companies/{code}/key-statistics`
+  returns `dateExDate`, `dateRecordDate`, `datePayDate`, `dividend` and
+  `frankingPercent`. Nothing reads it yet, so an ex-date still shows as a loss.
+- `[auto]` Feed the announcement text into the Claude call so the written notes
+  can use it. The text reaches the email but not yet the model, so the notes
+  explain a move without seeing the announcement that caused it.
+- `[auto]` A `price_sensitive_announcement` alert rule. The schema reserves the
+  type; nothing implements it.
 
 ## Open decisions
 

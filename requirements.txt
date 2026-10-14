@@ -1,3 +1,6 @@
 yfinance>=0.2.40
 PyYAML>=6.0
 anthropic>=0.40
+# ASX announcements: the feed is JSON over HTTPS, the documents are PDFs.
+requests>=2.31
+pypdf>=4.0
