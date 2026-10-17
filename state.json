@@ -1,12 +1,12 @@
 {
   "schema": 1,
-  "last_run": "2026-10-10",
+  "last_run": "2026-10-17",
   "prices": {
-    "CLNE.AX": 7.98,
-    "CWY.AX": 2.76,
-    "KKC.AX": 2.02,
-    "OCL.AX": 5.71,
-    "VGS.AX": 163.740005,
-    "VVLU.AX": 80.459999
+    "CLNE.AX": 7.84,
+    "CWY.AX": 2.47,
+    "KKC.AX": 2.04,
+    "OCL.AX": 5.87,
+    "VGS.AX": 164.559998,
+    "VVLU.AX": 82.5
   }
 }
