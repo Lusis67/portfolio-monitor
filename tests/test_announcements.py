@@ -8,6 +8,7 @@ price-sensitive; and nothing here can fail the run."""
 
 from harness import check, done, equal, heading
 from datetime import date
+from pathlib import Path
 
 from monitor import announcements as ann
 
@@ -216,5 +217,49 @@ feed = ann.collect(["AAA.AX"], since=SINCE, session=s, pause=0)
 equal("price_sensitive filters to the flagged ones", [a.headline for a in feed.price_sensitive], ["Results"])
 equal("items are oldest first", [a.when.day for a in feed.items], [9, 10])
 check("a clean run warns about nothing", ann.warnings_for(feed) == [])
+
+heading("the dependency that made every document fail on the runner")
+# The first scheduled run read zero documents: ASX PDFs are AES-256 encrypted
+# and pypdf declares `cryptography` as an extra, not a dependency. This
+# container happened to have it installed for unrelated reasons, so every local
+# test passed while the runner failed on all eight. The guard is structural
+# because the failure is an install problem, not a code path.
+req = (Path(__file__).resolve().parent.parent / "requirements.txt").read_text()
+check("requirements.txt asks for the crypto extra", "pypdf[crypto]" in req)
+check("and not the bare package", "\npypdf>=" not in req)
+check("with a comment saying why", "AES" in req and "encrypted" in req.lower())
+
+
+# pypdf raises this while PARSING, not while fetching, so the fake is injected
+# at the import the module does inside fetch_document_text. Raising it from the
+# HTTP layer instead would test the wrong handler and pass for the wrong reason.
+import sys
+import types
+
+_real_pypdf = sys.modules.get("pypdf")
+_fake = types.ModuleType("pypdf")
+
+
+def _boom(*args, **kwargs):
+    raise RuntimeError("cryptography>=3.1 is required for AES algorithm")
+
+
+_fake.PdfReader = _boom
+sys.modules["pypdf"] = _fake
+try:
+    s_ = FakeSession({"KKC": [item("KKC", 9, "Net Tangible Asset Backing", "nta")]},
+                     docs={"nta": PDF})
+    feed = ann.collect(["KKC.AX"], since=SINCE, session=s_, pause=0)
+finally:
+    if _real_pypdf is not None:
+        sys.modules["pypdf"] = _real_pypdf
+    else:
+        del sys.modules["pypdf"]
+
+equal("the announcement still appears", len(feed.items), 1)
+err = feed.items[0].text_error or ""
+check("the reason names the missing package", "cryptography" in err)
+check("and names the fix", "pypdf[crypto]" in err)
+check("rather than a bare exception dump", "RuntimeError" not in err)
 
 done()

@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-10-15
+**Last updated:** 2026-10-17
 
 ## What this is
 
@@ -26,6 +26,21 @@ for the week, never trip `price_move`, and are flagged once their price is
 more than 14 days old.
 
 ## Recent activity
+
+**2026-10-17 — the first runner execution read zero documents, and the cause
+was a dependency I did not declare.** ASX announcement PDFs are AES-256
+encrypted with an empty user password, and pypdf declares `cryptography` as an
+*extra* rather than a dependency. This container has it installed for unrelated
+reasons, so every local test and every live drive-through passed; the runner has
+only `requirements.txt`, so all eight documents failed with
+`cryptography>=3.1 is required for AES algorithm`.
+
+The degradation worked as designed — the email went out with headlines and the
+run exited zero — but the whole document-text feature and the NAV figure
+silently produced nothing. Fixed by asking for `pypdf[crypto]`, reproduced in a
+clean venv first and verified in the same venv afterwards. `tests/test_announcements.py`
+now asserts the extra is in `requirements.txt`, because the failure is an
+install problem that no code-path test would catch.
 
 **2026-10-15 — ASX announcements work, and the blocker was wrong.** The feed
 item's `url` field is empty, which an earlier pass took as "the documents are

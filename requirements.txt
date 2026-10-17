@@ -2,5 +2,12 @@ yfinance>=0.2.40
 PyYAML>=6.0
 anthropic>=0.40
 # ASX announcements: the feed is JSON over HTTPS, the documents are PDFs.
+# The [crypto] extra is NOT optional here. ASX announcement PDFs are
+# AES-256 encrypted (/V 5, /Length 256) with an empty user password, and
+# pypdf declares cryptography as an extra rather than a dependency. Without
+# it every document fails with "cryptography>=3.1 is required for AES
+# algorithm" — which is exactly what happened on the first runner execution,
+# because this container had cryptography installed for unrelated reasons
+# and the runner did not.
 requests>=2.31
-pypdf>=4.0
+pypdf[crypto]>=4.0

@@ -26,6 +26,11 @@ around:
   - **`isPriceSensitive` is the filer's own flag**, not a judgement. It is
     reported as what it is and never inferred from the headline.
 
+ASX announcement PDFs are **AES-256 encrypted** with an empty user password,
+so reading them needs pypdf's `crypto` extra. `requirements.txt` asks for
+`pypdf[crypto]` for that reason and the comment there explains why; the bare
+package installs happily and then fails on every single document.
+
 Nothing in here can fail the run. A code that errors is named and skipped; a
 document whose text cannot be read keeps its headline. An email with headlines
 is worth more than no email.
@@ -182,7 +187,17 @@ def fetch_document_text(document_key: str, session=None) -> tuple[str | None, st
         reader = PdfReader(io.BytesIO(body))
         text = "\n".join((page.extract_text() or "") for page in reader.pages)
     except Exception as exc:  # noqa: BLE001
-        return None, f"the PDF could not be read ({exc})"
+        detail = str(exc)
+        if "cryptography" in detail:
+            # Every document fails this way at once, and the cause is an
+            # install problem rather than anything about the document. Say so,
+            # and name the fix, rather than leaving a reader to infer it from
+            # eight identical lines.
+            return None, (
+                "the PDF is encrypted and the `cryptography` package is missing "
+                "— install pypdf[crypto]"
+            )
+        return None, f"the PDF could not be read ({detail})"
 
     text = "\n".join(line.rstrip() for line in text.splitlines())
     text = "\n".join(line for line in text.splitlines() if line.strip())
