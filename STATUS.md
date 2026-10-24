@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-10-17
+**Last updated:** 2026-10-24
 
 ## What this is
 
@@ -26,6 +26,24 @@ for the week, never trip `price_move`, and are flagged once their price is
 more than 14 days old.
 
 ## Recent activity
+
+**2026-10-24 — the `pypdf[crypto]` fix is confirmed on the runner.** Run 4
+(`event: schedule`, 00:23 UTC) shows no `cryptography` errors at all. What it
+shows instead is pypdf warning about CFF Type1 font encoding, which only happens
+*after* a document is decrypted and while its content is being parsed — so the
+AES-256 decryption works. The send step took 46s against 49s when every PDF
+failed fast. Verified independently here too: the 2026-10-21 KKC NTA document
+decrypts, yields 3,330 characters, and `parse_nav` reads **$2.2992** per unit.
+KKC closed at 2.02, a **12.1% discount to NAV**.
+
+**The Anthropic API key is dead for this repo as well**, which answers a
+question left open on 2026-10-19 about whether both repos share it. Run 4 logged
+`EXPLANATION SKIPPED — AuthenticationError: 401 invalid x-api-key` and **still
+sent the email and committed state** — the graceful path working exactly as
+designed, and the contrast with fantasy-agent, which dies outright on the same
+error. The cost is real though: CWY moved **+21.0%** and OCL **+11.9%** this
+week, both past the note threshold, so the Claude call was attempted and the
+owner got those moves with no written explanation.
 
 **2026-10-17 — the first runner execution read zero documents, and the cause
 was a dependency I did not declare.** ASX announcement PDFs are AES-256
